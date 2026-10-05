@@ -2,37 +2,44 @@ import os
 import glob
 import tempfile
 import io
+import traceback
 from contextlib import redirect_stdout, redirect_stderr
 import streamlit as st
 
 # Configuración de página
 st.set_page_config(
     page_title="Ejecutor Python a PPTX",
-    page_icon="⚡",
+    page_icon="🩸",
     layout="wide"
 )
 
-st.title("⚡ Convertidor de Código Python a PPTX")
+st.title(" Convertidor de Código Python a PPTX")
 st.write(
     "Pega cualquier código Python que utilice `python-pptx`. "
     "La aplicación lo ejecutará en un entorno aislado, detectará la presentación generada y te permitirá descargarla."
 )
 
-# Código por defecto (tu script de ejemplo)
+def sanitizar_codigo(code_str: str) -> str:
+    """Reemplaza comillas tipográficas y caracteres invisibles habituales al copiar/pegar."""
+    replacements = {
+        '“': '"', '”': '"',
+        '‘': "'", '’': "'",
+        '\xa0': ' ',  # Non-breaking space
+        '\r\n': '\n'
+    }
+    for old, new in replacements.items():
+        code_str = code_str.replace(old, new)
+    return code_str
+
+# Código por defecto
 DEFAULT_CODE = '''import os
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
 
 DARK_BG = RGBColor(15, 7, 10)
-LIGHT_BG = RGBColor(255, 248, 249)
 WHITE = RGBColor(255, 255, 255)
-DARK_TEXT = RGBColor(17, 24, 39)
-SUBTITLE_TEXT = RGBColor(100, 116, 139)
-RED_PRIMARY = RGBColor(225, 29, 72)
-RED_CRIMSON = RGBColor(244, 63, 94)
 
 prs = Presentation()
 prs.slide_width = Inches(13.333)
@@ -52,7 +59,6 @@ p.font.size = Pt(36)
 p.font.bold = True
 p.font.color.rgb = WHITE
 
-# Guardar la presentación (el nombre se detectará automáticamente)
 output_filename = "mi_presentacion.pptx"
 prs.save(output_filename)
 print(f"Presentación guardada correctamente como: {output_filename}")
@@ -65,7 +71,7 @@ with col_editor:
     user_code = st.text_area(
         "Código Python (.py):",
         value=DEFAULT_CODE,
-        height=550,
+        height=580,
         help="Asegúrate de incluir prs.save('nombre.pptx') al final de tu script."
     )
     
@@ -82,20 +88,27 @@ with col_preview:
                 stdout_capture = io.StringIO()
                 stderr_capture = io.StringIO()
                 
+                # Sanitizar el código pegado
+                clean_code = sanitizar_codigo(user_code)
+                
                 # Crear carpeta temporal aislada
                 with tempfile.TemporaryDirectory() as temp_dir:
                     original_cwd = os.getcwd()
                     try:
-                        # Cambiar al directorio temporal para que prs.save() guarde ahí
+                        # Cambiar al directorio temporal
                         os.chdir(temp_dir)
                         
-                        exec_globals = {}
+                        # Definir __name__ como __main__ para ejecutar bloques main()
+                        exec_globals = {
+                            "__name__": "__main__",
+                            "__file__": "script.py"
+                        }
                         
-                        # Capturar salidas de consola (print/errores)
+                        # Capturar salidas de consola
                         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                            exec(user_code, exec_globals)
+                            exec(clean_code, exec_globals)
                         
-                        # Buscar archivos .pptx creados durante la ejecución
+                        # Buscar archivos .pptx creados
                         pptx_files = glob.glob("*.pptx")
                         
                         if pptx_files:
@@ -115,13 +128,18 @@ with col_preview:
                         else:
                             st.error("❌ El script se ejecutó sin errores pero no generó ningún archivo `.pptx`. Revisa que incluyas `prs.save('nombre.pptx')`.")
                             
+                    except SyntaxError as syn_err:
+                        st.error(f"⚠️ Error de Sintaxis (Línea {syn_err.lineno}):\n\n`{syn_err.msg}`")
+                        if syn_err.text:
+                            st.code(syn_err.text, language="python")
                     except Exception as e:
                         st.error(f"⚠️ Error en la ejecución del código:\n\n`{e}`")
+                        st.code(traceback.format_exc(), language="text")
                     finally:
                         # Restaurar directorio original
                         os.chdir(original_cwd)
                 
-                # Mostrar consola de salida (prints)
+                # Mostrar logs de la consola
                 logs = stdout_capture.getvalue()
                 errs = stderr_capture.getvalue()
                 
